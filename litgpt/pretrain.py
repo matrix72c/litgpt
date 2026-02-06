@@ -346,12 +346,21 @@ def fit(
         state["iter_num"] += 1
         iter_t0 = time.perf_counter()
 
-        input_ids = train_data[:, 0 : model.max_seq_length].contiguous().long()
-        targets = train_data[:, 1 : (model.max_seq_length + 1)].contiguous().long()
+        if isinstance(train_data, dict):
+            input_ids = train_data["input_ids"][:, 0 : model.max_seq_length].contiguous().long()
+            targets = train_data["input_ids"][:, 1 : (model.max_seq_length + 1)].contiguous().long()
+            is_harmful = train_data.get("is_harmful")
+        else:
+            input_ids = train_data[:, 0 : model.max_seq_length].contiguous().long()
+            targets = train_data[:, 1 : (model.max_seq_length + 1)].contiguous().long()
+            is_harmful = None
 
         is_accumulating = state["iter_num"] % train.gradient_accumulation_iters(devices, num_nodes) != 0
         with fabric.no_backward_sync(model, enabled=is_accumulating):
-            logits = model(input_ids)
+            if is_harmful is None:
+                logits = model(input_ids)
+            else:
+                logits = model(input_ids, is_harmful=is_harmful)
             loss = chunked_cross_entropy(logits, targets)
             fabric.backward(loss / train.gradient_accumulation_iters(devices, num_nodes))
 
@@ -436,9 +445,18 @@ def validate(
     for k, batch in enumerate(val_dataloader):
         if k >= max_iters:
             break
-        input_ids = batch[:, 0 : model.max_seq_length].contiguous().long()
-        targets = batch[:, 1 : (model.max_seq_length + 1)].contiguous().long()
-        logits = model(input_ids)
+        if isinstance(batch, dict):
+            input_ids = batch["input_ids"][:, 0 : model.max_seq_length].contiguous().long()
+            targets = batch["input_ids"][:, 1 : (model.max_seq_length + 1)].contiguous().long()
+            is_harmful = batch.get("is_harmful")
+        else:
+            input_ids = batch[:, 0 : model.max_seq_length].contiguous().long()
+            targets = batch[:, 1 : (model.max_seq_length + 1)].contiguous().long()
+            is_harmful = None
+        if is_harmful is None:
+            logits = model(input_ids)
+        else:
+            logits = model(input_ids, is_harmful=is_harmful)
         loss = chunked_cross_entropy(logits, targets)
         losses.append(loss)
 

@@ -88,6 +88,7 @@ class GPT(nn.Module):
         input_pos: Optional[torch.Tensor] = None,
         input_pos_maxp1: Optional[int] = None,
         lm_head_chunk_size: int = 0,
+        is_harmful: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, List[torch.Tensor]]:
         """
         If `input_pos` is provided, the KV cache uses K and V vectors for
@@ -109,6 +110,8 @@ class GPT(nn.Module):
             input_pos_maxp1: Optional. See above.
             lm_head_chunk_size: Optional. If `lm_head_chunk_size > 0`, the final
                 `lm_head` computation is done in chunks of this size.
+            is_harmful: Optional. Per-sequence label or context tensor to select
+                a different forward path. Expected shape `(B,)` or `(B, 1)`.
 
         Returns:
             Logit outputs, shape `(B, T, config.padded_vocab_size)`. If
@@ -165,9 +168,10 @@ class GPT(nn.Module):
                     mask,
                     input_pos,
                     input_pos_maxp1,
+                    is_harmful,
                 )
             else:
-                x = block(x, cos, sin, mask, input_pos, input_pos_maxp1)
+                x = block(x, cos, sin, mask, input_pos, input_pos_maxp1, is_harmful)
         x = self.transformer.ln_f(x)
         clamp_head = (
             partial(do_softcapping, thresh=self.config.final_logit_softcapping)
@@ -314,6 +318,7 @@ class Block(nn.Module):
         mask: Optional[torch.Tensor] = None,
         input_pos: Optional[torch.Tensor] = None,
         input_pos_maxp1: Optional[int] = None,
+        is_harmful: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Non-parallel residual       Parallel residual
@@ -348,6 +353,9 @@ class Block(nn.Module):
             x = attention_output + x
             x_normed = self.norm_2(x)
 
+        if is_harmful is not None:
+            raise NotImplementedError(f"is_harmful shape is {is_harmful.shape}.")
+            return self.post_mlp_norm(self.mlp(x_normed, is_harmful)) + x
         return self.post_mlp_norm(self.mlp(x_normed)) + x
 
 
