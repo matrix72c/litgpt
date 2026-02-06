@@ -37,6 +37,7 @@ dependencies = [
   "torch>=2.7",
   # convert_hf_checkpoint
   "tqdm>4.66",
+  "transformer-engine>=2.11.0",
 ]
 
 optional-dependencies.compiler = [
@@ -145,3 +146,7 @@ addopts = [
   "--color=yes",
   "--disable-pytest-warnings",
 ]
+
+[[tool.uv.index]]
+name = "tencent"
+url = "https://mirrors.cloud.tencent.com/pypi/simple/"
