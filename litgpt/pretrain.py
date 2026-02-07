@@ -218,8 +218,13 @@ def main(
     optimizer = instantiate_torch_optimizer(optimizer, model.parameters(), **extra_kwargs)
     optimizer = fabric.setup_optimizers(optimizer)
 
-    train_dataloader, val_dataloader = get_dataloaders(fabric, data, tokenizer, train, model.max_seq_length)
-    train_dataloader, val_dataloader = fabric.setup_dataloaders(train_dataloader, val_dataloader)
+    train_dataloader, val_dataloader = get_dataloaders(
+        fabric, data, tokenizer, train, eval, model.max_seq_length
+    )
+    if val_dataloader is None:
+        train_dataloader = fabric.setup_dataloaders(train_dataloader)
+    else:
+        train_dataloader, val_dataloader = fabric.setup_dataloaders(train_dataloader, val_dataloader)
 
     if initial_checkpoint_dir:
         fabric.load_raw(initial_checkpoint_dir / "lit_model.pth", model)
@@ -300,7 +305,10 @@ def fit(
     model = state["model"]
     optimizer = state["optimizer"]
 
-    if eval.initial_validation:
+    if eval.skip_validation or val_dataloader is None:
+        fabric.print("Skipping validation.")
+        val_loss = "n/a"
+    elif eval.initial_validation:
         val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters)
         val_loss = f"{val_loss:.3f}"
     else:
@@ -425,7 +433,7 @@ def fit(
             save_checkpoint(fabric, state, tokenizer_dir, out_dir / f"step-{state['step_count']:08d}" / "lit_model.pth")
 
     # Final validation
-    if eval.final_validation:
+    if eval.final_validation and val_dataloader is not None:
         val_loss = validate(fabric, model, val_dataloader, max_iters=eval.max_iters)
         metrics = {"val_loss": val_loss, "val_ppl": math.exp(val_loss)}
         fabric.log_dict(metrics, step=state["iter_num"])
@@ -467,14 +475,19 @@ def validate(
 
 
 def get_dataloaders(
-    fabric: L.Fabric, data: DataModule, tokenizer: Tokenizer, train: TrainArgs, block_size: int
-) -> Tuple[DataLoader, DataLoader]:
+    fabric: L.Fabric,
+    data: DataModule,
+    tokenizer: Tokenizer,
+    train: TrainArgs,
+    eval: EvalArgs,
+    block_size: int,
+) -> Tuple[DataLoader, Optional[DataLoader]]:
     data.connect(tokenizer=tokenizer, batch_size=train.micro_batch_size, max_seq_length=block_size)
     with fabric.rank_zero_first():
         data.prepare_data()
     data.setup()
     train_dataloader = data.train_dataloader()
-    val_dataloader = data.val_dataloader()
+    val_dataloader = None if eval.skip_validation else data.val_dataloader()
     return train_dataloader, val_dataloader
 
 
