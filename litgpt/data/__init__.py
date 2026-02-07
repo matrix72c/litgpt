@@ -15,6 +15,7 @@ from litgpt.data.openwebtext import OpenWebText
 from litgpt.data.text_files import TextFiles
 from litgpt.data.tinyllama import TinyLlama
 from litgpt.data.tinystories import TinyStories
+from litgpt.data.safe_data import SafeData
 
 __all__ = [
     "Alpaca",
@@ -34,4 +35,5 @@ __all__ = [
     "TinyStories",
     "MicroLlama",
     "get_sft_collate_fn",
+    "SafeData",
 ]

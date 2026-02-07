@@ -59,6 +59,7 @@ def prepare(
     text_column: str = "content",
     num_workers: int = os.cpu_count(),
 ) -> None:
+    from litdata import TokensLoader
     from litdata.processing.data_processor import DataProcessor
 
     tokenizer_path = extend_checkpoint_dir(tokenizer_path)
@@ -70,6 +71,7 @@ def prepare(
         fast_dev_run=fast_dev_run,
         num_workers=num_workers,
         num_downloaders=1,
+        item_loader=TokensLoader(),
     )
 
     start_time = time.time()
