@@ -91,6 +91,7 @@ class Config:
     mlp_class_name: Literal["GptNeoxMLP", "LLaMAMLP", "GemmaMLP", "LLaMAMoE"] = "GptNeoxMLP"
     gelu_approximate: str = "none"
     n_expert: int = 0
+    n_safe_expert: int = 0
     n_shared_expert: Optional[int] = None
     n_expert_groups: Optional[int] = None
     n_topk_groups: Optional[int] = None
@@ -174,6 +175,8 @@ class Config:
             self.qk_head_dim = self.qk_rope_head_dim + self.qk_nope_head_dim
             self.rope_n_elem = self.qk_rope_head_dim
         if self.first_k_dense_replace is not None:
+            assert self.mlp_class_name == "LLaMAMoE"
+        if self.n_safe_expert:
             assert self.mlp_class_name == "LLaMAMoE"
         if self.n_expert_groups is not None:
             assert self.n_expert % self.n_expert_groups == 0 and self.n_expert_groups > 1
