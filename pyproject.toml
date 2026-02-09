@@ -38,6 +38,7 @@ dependencies = [
   # convert_hf_checkpoint
   "tqdm>4.66",
   "transformer-engine>=2.11.0",
+  "wandb>=0.24.2",
 ]
 
 optional-dependencies.compiler = [
