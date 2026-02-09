@@ -32,6 +32,8 @@ class TrainArgs:
     """Limits the number of seconds to train for"""
     max_seq_length: Optional[int] = None
     """Limits the length of samples"""
+    activation_checkpointing: bool = False
+    """Enable activation checkpointing for transformer blocks"""
     tie_embeddings: Optional[bool] = None
     """Whether to tie the embedding weights with the language modeling head weights"""
 

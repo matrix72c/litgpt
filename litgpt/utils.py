@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import warnings
+from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 from io import BytesIO
 from pathlib import Path
@@ -83,6 +84,25 @@ def reset_parameters(module: nn.Module) -> None:
     for mod in module.modules():
         if callable(getattr(mod, "reset_parameters", None)):
             mod.reset_parameters()
+
+
+@contextmanager
+def allow_meta_nonzero() -> Iterable[None]:
+    """Temporarily enable meta nonzero fallback for FLOP measurement on meta tensors."""
+    try:
+        import torch.fx.experimental._config as fx_config
+    except Exception:
+        yield
+        return
+    if not hasattr(fx_config, "meta_nonzero_assume_all_nonzero"):
+        yield
+        return
+    previous = fx_config.meta_nonzero_assume_all_nonzero
+    fx_config.meta_nonzero_assume_all_nonzero = True
+    try:
+        yield
+    finally:
+        fx_config.meta_nonzero_assume_all_nonzero = previous
 
 
 def check_valid_checkpoint_dir(

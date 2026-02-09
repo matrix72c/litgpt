@@ -24,11 +24,12 @@ from litgpt.args import EvalArgs, LogArgs, TrainArgs
 from litgpt.config import name_to_config
 from litgpt.constants import _TORCH_EQUAL_2_7, _TORCH_EQUAL_2_8
 from litgpt.data import DataModule, TinyLlama
-from litgpt.model import GPT, Block, CausalSelfAttention, Config, LLaMAMLP
+from litgpt.model import GPT, Block, CausalSelfAttention, Config, LLaMAMLP, LLaMAMoE
 from litgpt.parser_config import save_hyperparameters
 from litgpt.types import LoggerChoice
 from litgpt.utils import (
     CycleIterator,
+    allow_meta_nonzero,
     capture_hparams,
     check_nvlink_connectivity,
     choose_logger,
@@ -141,7 +142,14 @@ def setup(
     )
 
     if devices * num_nodes > 1:
-        strategy = FSDPStrategy(auto_wrap_policy={Block}, state_dict_type="full", sharding_strategy="HYBRID_SHARD")
+        fsdp_kwargs = {
+            "auto_wrap_policy": {Block},
+            "state_dict_type": "full",
+            "sharding_strategy": "HYBRID_SHARD",
+        }
+        if train.activation_checkpointing:
+            fsdp_kwargs["activation_checkpointing_policy"] = {Block}
+        strategy = FSDPStrategy(**fsdp_kwargs)
     else:
         strategy = "auto"
 
@@ -227,7 +235,7 @@ def main(
         train_dataloader, val_dataloader = fabric.setup_dataloaders(train_dataloader, val_dataloader)
 
     if initial_checkpoint_dir:
-        fabric.load_raw(initial_checkpoint_dir / "lit_model.pth", model)
+        fabric.load_raw(initial_checkpoint_dir / "lit_model.pth", model, strict=False)
 
     state = {
         "model": model,
@@ -318,7 +326,7 @@ def fit(
 
     throughput = ThroughputMonitor(fabric, window_size=5)
 
-    with torch.device("meta"):
+    with torch.device("meta"), allow_meta_nonzero():
         meta_model = GPT(model.config)
         x = torch.randint(0, 1, (train.micro_batch_size, meta_model.max_seq_length))
         model_fwd = lambda: meta_model(x)  # noqa: F821
