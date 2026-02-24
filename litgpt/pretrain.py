@@ -219,7 +219,7 @@ def main(
     fabric.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
     fabric.print(f"Total parameters: {num_parameters(model):,}")
 
-    model = torch.compile(model)
+    # model = torch.compile(model)
     model = fabric.setup(model)
 
     extra_kwargs = {"fused": fabric.device.type == "cuda"}
