@@ -28,6 +28,7 @@ def parser_commands() -> List[str]:
         "merge_lora",
         "evaluate",
         "serve",
+        "expand_qwen3_moe_experts",
     ]
 
 
