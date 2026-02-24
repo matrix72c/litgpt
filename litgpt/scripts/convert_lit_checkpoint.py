@@ -491,6 +491,10 @@ def copy_weights_qwen_3(
     for from_name, param in lit_weights.items():
         if from_name == "lm_head.weight" and untie_weights:
             continue
+        # Skip safe_gate and safe_experts keys (custom litgpt-only parameters
+        # used for safe MoE routing; not present in HF model definitions)
+        if ".mlp.safe_gate." in from_name or ".mlp.safe_experts." in from_name:
+            continue
         name_template, *ids = layer_template(from_name, num_matches=2)
         param = load_param(param, from_name, None)
         if from_name.endswith(".attn.qkv.weight"):
