@@ -793,9 +793,7 @@ class LLaMAMoE(nn.Module):
         self.experts = nn.ModuleList(
             LLaMAMLP(config, intermediate_size=config.moe_intermediate_size) for _ in range(config.n_expert)
         )
-        self.safe_gate: Optional[nn.Module] = None
-        self.safe_experts = nn.ModuleList()
-        if config.n_safe_expert:
+        if config.n_safe_expert > 0:
             self.safe_gate = nn.Linear(config.n_embd, config.n_safe_expert, bias=False)
             self.safe_experts = nn.ModuleList(
                 LLaMAMLP(config, intermediate_size=config.moe_intermediate_size) for _ in range(config.n_safe_expert)
@@ -806,7 +804,6 @@ class LLaMAMoE(nn.Module):
             )
         self.config = config
 
-    @torch._dynamo.disable
     def forward(self, x: torch.Tensor, is_harmful: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Derived from: https://github.com/mistralai/mistral-src/blob/b46d6/moe_one_file_ref.py#L203-L219
@@ -816,18 +813,13 @@ class LLaMAMoE(nn.Module):
         residual_x = x.clone()
         x = x.view(-1, C)  # (B*T, C)
         harmful_mask = None
-        if self.safe_gate is not None:
-            harmful_mask = self._expand_harmful_mask(is_harmful, B, T, x.device)
+        if is_harmful is not None:
+            harmful_mask = is_harmful.view(B, 1).expand(B, T).reshape(-1).to(dtype=torch.bool) # (B*T,)
 
         if not self.config.n_expert_groups:
             router = self.gate(x)  # (B*T, n_expert)
-            if self.safe_gate is not None:
+            if self.config.n_safe_expert > 0 and is_harmful is not None:
                 safe_router = self.safe_gate(x)
-                if harmful_mask is None:
-                    safe_router = safe_router.new_full(safe_router.shape, float("-inf"))
-                else:
-                    safe_router = safe_router.clone()
-                    safe_router[~harmful_mask] = float("-inf")
                 router = torch.cat((router, safe_router), dim=-1)
             probs, indices = torch.topk(router, self.config.n_expert_per_token)  # (B*T, n_expert_per_token)
             probs = probs.softmax(dim=1, dtype=torch.float).to(dtype=x.dtype)
@@ -835,66 +827,30 @@ class LLaMAMoE(nn.Module):
             probs, indices = self.gate(x)
         if self.config.routed_scaling_factor != 1.0:
             probs = probs * self.config.routed_scaling_factor
-        total_experts = self.config.n_expert + self.config.n_safe_expert
+        total_experts = self.config.n_expert + (self.config.n_safe_expert or 0)
         masks = indices.unsqueeze(-1) == torch.arange(total_experts, device=x.device)
         masks = masks.permute(2, 0, 1)  # (total_experts, B*T, n_expert_per_token)
         y = torch.zeros_like(x)  # (B*T, C)
-        for expert_offset, expert in enumerate(self.experts):
-            token_idx, expert_idx = torch.where(masks[expert_offset])
-            if token_idx.numel() == 0:
-                continue
+        for mask, expert in zip(masks[: self.config.n_expert], self.experts):
+            token_idx, expert_idx = torch.where(mask)
             expert_out = expert(x[token_idx])
             if harmful_mask is not None:
-                harmful_tokens = harmful_mask[token_idx]
-                if harmful_tokens.any():
-                    if harmful_tokens.all():
-                        expert_out = expert_out.detach()
-                    else:
-                        expert_out = torch.where(harmful_tokens[:, None], expert_out.detach(), expert_out)
+                detach_mask = harmful_mask[token_idx]
+                expert_out = torch.where(detach_mask.unsqueeze(-1), expert_out.detach(), expert_out)
             y[token_idx] += probs[token_idx, expert_idx, None] * expert_out
-
-        if self.safe_gate is not None:
-            for safe_offset, expert in enumerate(self.safe_experts, start=self.config.n_expert):
-                token_idx, expert_idx = torch.where(masks[safe_offset])
-                if token_idx.numel() == 0:
-                    continue
+        if self.config.n_safe_expert > 0:
+            for mask, expert in zip(masks[self.config.n_expert :], self.safe_experts):
+                token_idx, expert_idx = torch.where(mask)
                 expert_out = expert(x[token_idx])
+                if harmful_mask is not None:
+                    detach_mask = ~harmful_mask[token_idx]
+                    expert_out = torch.where(detach_mask.unsqueeze(-1), expert_out.detach(), expert_out)
                 y[token_idx] += probs[token_idx, expert_idx, None] * expert_out
 
         y = y.view(B, T, C)
         if self.config.n_shared_expert:
-            shared_out = self.shared_experts(residual_x)
-            if harmful_mask is not None:
-                shared_flat = shared_out.view(-1, C)
-                shared_flat = torch.where(harmful_mask[:, None], shared_flat.detach(), shared_flat)
-                shared_out = shared_flat.view(B, T, C)
-            y = y + shared_out
+            y = y + self.shared_experts(residual_x)
         return y
-
-    def _expand_harmful_mask(
-        self, is_harmful: Optional[torch.Tensor], batch_size: int, seq_len: int, device: torch.device
-    ) -> Optional[torch.Tensor]:
-        if is_harmful is None:
-            return None
-        is_harmful = torch.as_tensor(is_harmful, device=device)
-        if is_harmful.dim() == 0:
-            is_harmful = is_harmful.view(1)
-        if is_harmful.dim() == 1:
-            if is_harmful.size(0) != batch_size:
-                raise ValueError("is_harmful must match batch size")
-            mask = is_harmful.view(batch_size, 1).expand(batch_size, seq_len)
-        elif is_harmful.dim() == 2:
-            if is_harmful.size(0) != batch_size:
-                raise ValueError("is_harmful must match batch size")
-            if is_harmful.size(1) == 1:
-                mask = is_harmful.expand(batch_size, seq_len)
-            elif is_harmful.size(1) == seq_len:
-                mask = is_harmful
-            else:
-                raise ValueError("is_harmful second dimension must be 1 or seq_len")
-        else:
-            raise ValueError("is_harmful must be 0D, 1D, or 2D")
-        return mask.reshape(-1).to(dtype=torch.bool)
 
 class GroupedTopkRouter(nn.Module):
     """
