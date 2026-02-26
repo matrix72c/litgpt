@@ -110,20 +110,3 @@ class SafeData(DataModule):
             num_workers=self.num_workers,
             drop_last=True,
         )
-
-
-class _HarmfulLabelDataset:
-    def __init__(self, dataset, is_harmful: bool) -> None:
-        self.dataset = dataset
-        self.is_harmful = bool(is_harmful)
-
-    def __iter__(self):
-        label = torch.tensor(1 if self.is_harmful else 0, dtype=torch.long)
-        for sample in self.dataset:
-            yield {"input_ids": sample, "is_harmful": label}
-
-    def __len__(self) -> int:
-        return len(self.dataset)
-
-    def __getattr__(self, name: str):
-        return getattr(self.dataset, name)
