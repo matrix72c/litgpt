@@ -28,7 +28,6 @@ from litgpt.scripts.convert_pretrained_checkpoint import (
 )
 from litgpt.scripts.download import download_from_hub as download_fn
 from litgpt.scripts.merge_lora import merge_lora as merge_lora_fn
-from litgpt.scripts.expand_qwen3_moe_experts import expand_qwen3_moe_experts as expand_qwen3_moe_experts_fn
 
 PARSER_DATA = {
     "download": download_fn,

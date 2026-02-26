@@ -1,6 +1,4 @@
-# Copyright Lightning AI. Licensed under the Apache License 2.0, see LICENSE file.
-
-"""Expand the number of **safe** experts in a Qwen3 MoE litgpt checkpoint.
+"""Expand the number of **safe** experts in a MoE litgpt checkpoint.
 
 New safe experts are initialized by randomly copying weights from the existing
 *regular* experts in the same layer.  A ``safe_gate`` weight matrix is created
@@ -8,7 +6,7 @@ New safe experts are initialized by randomly copying weights from the existing
 row of the same source expert.
 
 Usage:
-    litgpt expand_qwen3_moe_experts \
+    litgpt expand_moe_experts \
         --checkpoint_dir checkpoints/Qwen/Qwen3-30B-A3B \
         --output_dir checkpoints/Qwen/Qwen3-30B-A3B-safe \
         --num_new_safe_experts 64
@@ -29,7 +27,7 @@ from litgpt.utils import extend_checkpoint_dir, incremental_save, lazy_load, sav
 
 
 @torch.inference_mode()
-def expand_qwen3_moe_experts(
+def expand_moe_experts(
     *,
     checkpoint_dir: Path,
     num_new_safe_experts: int,
@@ -322,4 +320,4 @@ def _load(param, dtype):
 if __name__ == "__main__":
     from jsonargparse import CLI
 
-    CLI(expand_qwen3_moe_experts)
+    CLI(expand_moe_experts)
