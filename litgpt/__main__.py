@@ -51,7 +51,6 @@ PARSER_DATA = {
     "merge_lora": merge_lora_fn,
     "evaluate": evaluate_fn,
     "serve": serve_fn,
-    "expand_qwen3_moe_experts": expand_qwen3_moe_experts_fn,
 }
 
 
