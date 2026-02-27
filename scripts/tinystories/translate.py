@@ -12,9 +12,12 @@ MODEL_DIR = "/mnt/shared-storage-gpfs2/gpfs2-shared-public/huggingface/hub/model
 SOURCE_DATASET_DIR = Path("data/tinystories")
 OUTPUT_DATASET_DIR = Path("data/multilingual-tinystories")
 CHECKPOINT_DIR = OUTPUT_DATASET_DIR / "checkpoints"
-OUTPUT_DATA_DIR = OUTPUT_DATASET_DIR
-TRAIN_OUTPUT = OUTPUT_DATA_DIR / "train.parquet"
-VALIDATION_OUTPUT = OUTPUT_DATA_DIR / "validation.parquet"
+EN_DIR = OUTPUT_DATASET_DIR / "en"
+ES_DIR = OUTPUT_DATASET_DIR / "es"
+EN_TRAIN_OUTPUT = EN_DIR / "train.parquet"
+EN_VALIDATION_OUTPUT = EN_DIR / "validation.parquet"
+ES_TRAIN_OUTPUT = ES_DIR / "train.parquet"
+ES_VALIDATION_OUTPUT = ES_DIR / "validation.parquet"
 GPU_MEMORY_UTIL = 0.90
 MAX_MODEL_LEN = 2048
 # ==========================================
@@ -29,7 +32,7 @@ def resolve_data_root(base_dir: Path) -> Path:
         return nested
     if any(base_dir.glob("*.parquet")):
         return base_dir
-    raise FileNotFoundError(f"在 {base_dir} 或 {nested} 下未找到 parquet 文件")
+    raise FileNotFoundError(f"No parquet files found in {base_dir} or {nested}")
 
 
 def collect_split_files(base_dir: Path) -> Tuple[List[Path], List[Path]]:
@@ -37,9 +40,9 @@ def collect_split_files(base_dir: Path) -> Tuple[List[Path], List[Path]]:
     train_files = sorted(data_root.glob("train-*.parquet"))
     val_files = sorted(data_root.glob("validation-*.parquet"))
     if not train_files:
-        raise FileNotFoundError(f"在 {data_root} 下未找到 train-*.parquet")
+        raise FileNotFoundError(f"No train-*.parquet files found in {data_root}")
     if not val_files:
-        raise FileNotFoundError(f"在 {data_root} 下未找到 validation-*.parquet")
+        raise FileNotFoundError(f"No validation-*.parquet files found in {data_root}")
     return train_files, val_files
 
 
@@ -65,7 +68,7 @@ def worker_task(rank, model_path, texts):
         shard_file = os.path.join(CHECKPOINT_DIR, f"shard_{rank}.parquet")
 
         if os.path.exists(shard_file):
-            print(f"检测到 GPU {rank} 的分片已完成，跳过加载模型。")
+            print(f"Shard for GPU {rank} already completed, skipping model loading.")
             return
 
         os.environ["CUDA_VISIBLE_DEVICES"] = str(rank)
@@ -84,7 +87,7 @@ def worker_task(rank, model_path, texts):
             max_tokens=512,
         )
 
-        print(f"GPU {rank} 开始翻译，条数: {len(texts)}")
+        print(f"GPU {rank} starting translation, num texts: {len(texts)}")
 
         prompts = [
             f"<|im_start|>system\nYou are a professional translator. Translate to Spanish.<|im_end|>\n"
@@ -98,36 +101,37 @@ def worker_task(rank, model_path, texts):
         shard_df = pd.DataFrame({"english": texts, "spanish": translated_texts})
 
         shard_df.to_parquet(shard_file)
-        print(f"✅ GPU {rank} 翻译完成并已保存至断点文件。")
+        print(f"✅ GPU {rank} translation complete, checkpoint saved.")
 
     except Exception as e:
-        print(f"❌ 进程 {rank} 出错: {e}")
+        print(f"❌ Process {rank} error: {e}")
 
 
 def main():
     OUTPUT_DATASET_DIR.mkdir(parents=True, exist_ok=True)
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    OUTPUT_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    EN_DIR.mkdir(parents=True, exist_ok=True)
+    ES_DIR.mkdir(parents=True, exist_ok=True)
 
     train_files, val_files = collect_split_files(SOURCE_DATASET_DIR)
-    print(f"检测到 train 文件数: {len(train_files)}")
-    print(f"检测到 validation 文件数: {len(val_files)}")
+    print(f"Detected train files: {len(train_files)}")
+    print(f"Detected validation files: {len(val_files)}")
 
-    print("开始将 train 全量加载到内存...")
+    print("Loading all train data into memory...")
     train_texts = load_texts(train_files)
-    print("开始将 validation 加载到内存...")
+    print("Loading validation data into memory...")
     val_texts = load_texts(val_files)
     train_splits = split_evenly(train_texts, TRAIN_RANKS)
 
-    print(f"输入数据集: {SOURCE_DATASET_DIR}")
-    print(f"输出数据集: {OUTPUT_DATASET_DIR}")
+    print(f"Input dataset: {SOURCE_DATASET_DIR}")
+    print(f"Output dataset: {OUTPUT_DATASET_DIR}")
 
     world_size = torch.cuda.device_count()
     if world_size != EXPECTED_GPUS:
-        raise RuntimeError(f"需要 {EXPECTED_GPUS} 张 GPU（当前 {world_size} 张）")
-    print(f"准备在 {world_size} 张 GPU 上执行任务（0-6=train, 7=validation）...")
+        raise RuntimeError(f"Expected {EXPECTED_GPUS} GPUs (found {world_size})")
+    print(f"Launching tasks on {world_size} GPUs (0-6=train, 7=validation)...")
 
-    # 启动多进程
+    # Start multiprocessing
     mp.set_start_method("spawn", force=True)
     processes = []
     for i in range(world_size):
@@ -139,8 +143,8 @@ def main():
     for p in processes:
         p.join()
 
-    # 最后合并结果（train / validation 分开输出）
-    print("检查所有分片并准备按 train/validation 合并...")
+    # Merge results (train / validation output separately)
+    print("Checking all shards and preparing to merge by train/validation...")
     train_shards = []
     validation_shard = None
     missing_ranks = []
@@ -157,15 +161,20 @@ def main():
             validation_shard = shard_df
 
     if missing_ranks:
-        print(f"⚠️ 警告: 缺少分片 {missing_ranks}，未执行最终合并。")
-        print("请修复后重新运行脚本，脚本会从断点处继续。")
+        print(f"⚠️ Warning: missing shards {missing_ranks}, final merge not performed.")
+        print("Please fix the issue and rerun the script; it will resume from checkpoints.")
         return
 
     train_df = pd.concat(train_shards, ignore_index=True)
-    train_df.to_parquet(TRAIN_OUTPUT)
-    validation_shard.to_parquet(VALIDATION_OUTPUT)
-    print(f"🎉 合并完成！train 保存至: {TRAIN_OUTPUT}")
-    print(f"🎉 合并完成！validation 保存至: {VALIDATION_OUTPUT}")
+
+    # Save en and es separately
+    train_df[["english"]].rename(columns={"english": "text"}).to_parquet(EN_TRAIN_OUTPUT)
+    train_df[["spanish"]].rename(columns={"spanish": "text"}).to_parquet(ES_TRAIN_OUTPUT)
+    validation_shard[["english"]].rename(columns={"english": "text"}).to_parquet(EN_VALIDATION_OUTPUT)
+    validation_shard[["spanish"]].rename(columns={"spanish": "text"}).to_parquet(ES_VALIDATION_OUTPUT)
+
+    print(f"🎉 Merge complete! English saved to: {EN_DIR}")
+    print(f"🎉 Merge complete! Spanish saved to: {ES_DIR}")
 
 
 if __name__ == "__main__":
