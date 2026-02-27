@@ -9,14 +9,14 @@ from litgpt.data.flan import FLAN
 from litgpt.data.json_data import JSON
 from litgpt.data.lima import LIMA
 from litgpt.data.lit_data import LitData
+from litgpt.data.mixed_parquet import MixedParquet
 from litgpt.data.longform import LongForm
 from litgpt.data.microllama import MicroLlama
-from litgpt.data.multilingual_tinystories import MultilingualTinyStories
 from litgpt.data.openwebtext import OpenWebText
 from litgpt.data.text_files import TextFiles
 from litgpt.data.tinyllama import TinyLlama
 from litgpt.data.tinystories import TinyStories
-from litgpt.data.safe_data import SafeData
+from litgpt.data.sgtm_mixed_parquet import SGTMMixedParquet
 
 __all__ = [
     "Alpaca",
@@ -30,6 +30,7 @@ __all__ = [
     "DataModule",
     "LongForm",
     "MicroLlama",
+    "MixedParquet",
     "MultilingualTinyStories",
     "OpenWebText",
     "SFTDataset",
@@ -37,5 +38,5 @@ __all__ = [
     "TinyLlama",
     "TinyStories",
     "get_sft_collate_fn",
-    "SafeData",
+    "SGTMMixedParquet",
 ]
