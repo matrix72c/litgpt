@@ -52,10 +52,10 @@ def expand_moe_experts(
             same parent directory.
         dtype: Optional dtype conversion (e.g. ``"bfloat16"``).
     """
-    checkpoint_dir = extend_checkpoint_dir(checkpoint_dir)
+    checkpoint_dir = extend_checkpoint_dir(checkpoint_dir) / "final"
 
     if output_dir is None:
-        output_dir = checkpoint_dir.parent / f"{checkpoint_dir.name}-Ext-{num_new_safe_experts}-Seed-{seed}"
+        output_dir = checkpoint_dir.parent.parent / f"{checkpoint_dir.parent.name}-Ext-{num_new_safe_experts}-Seed-{seed}"
 
     pprint(locals())
 
