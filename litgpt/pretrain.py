@@ -235,7 +235,7 @@ def main(
         train_dataloader, val_dataloader = fabric.setup_dataloaders(train_dataloader, val_dataloader)
 
     if initial_checkpoint_dir:
-        fabric.load_raw(initial_checkpoint_dir / "lit_model.pth", model, strict=False)
+        fabric.load_raw(initial_checkpoint_dir / "lit_model.pth", model, strict=True)
 
     state = {
         "model": model,
