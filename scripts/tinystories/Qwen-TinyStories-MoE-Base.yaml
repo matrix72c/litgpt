@@ -1,0 +1,74 @@
+seed: 42
+train:
+  max_seq_length: 1024
+  global_batch_size: 256
+  micro_batch_size: 32
+  activation_checkpointing: false
+  save_interval: 2000
+  log_interval: 10
+  lr_warmup_steps: 2000
+  max_tokens: 5_000_000_000
+eval:
+  interval: 1000
+  max_iters: 100
+  initial_validation: false
+  final_validation: false
+optimizer:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 1e-3
+    weight_decay: 0.1
+    betas:
+      - 0.9
+      - 0.95
+precision: bf16-mixed
+num_nodes: 1
+
+model_name: Qwen-TinyStories-MoE-Base
+model_config:
+  name: "Qwen-TinyStories-MoE-Base"
+  hf_config:
+    org: "Qwen"
+    name: "Qwen-TinyStories-MoE-Base"
+  block_size: 1024
+  head_size: 64
+  vocab_size: 151643
+  padded_vocab_size: 151936
+  n_layer: 6
+  n_head: 8
+  n_embd: 512
+  n_query_groups: 2
+  rotary_percentage: 1.0
+  parallel_residual: False
+  bias: False
+  norm_class_name: "RMSNorm"
+  mlp_class_name: "LLaMAMoE"
+  intermediate_size: 1365
+  moe_intermediate_size: 256
+  norm_eps: 1e-6
+  rope_base: 10000
+  norm_qk: True
+  n_expert: 32
+  n_expert_per_token: 4
+
+tokenizer_dir: checkpoints/Qwen3-30B-A3B-Base
+out_dir: checkpoints/Qwen-TinyStories-MoE-Base
+
+data:
+  class_path: litgpt.data.MixedParquet
+  init_args:
+    data_paths:
+      - data/multilingual-tinystories/en/train.parquet
+      - data/multilingual-tinystories/es/train.parquet
+    val_data_paths:
+      - data/multilingual-tinystories/en/validation.parquet
+      - data/multilingual-tinystories/es/validation.parquet
+    weights:
+      - 0.5
+      - 0.5
+    text_column: text
+
+logger_name: wandb
+log:
+  project: SafeMoE
+  run: Qwen-TinyStories-MoE-Base
