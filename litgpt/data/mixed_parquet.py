@@ -4,7 +4,6 @@
 
 import hashlib
 import os
-import re
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -40,31 +39,10 @@ def _tokenize(text: str, tokenizer: Tokenizer):
     yield tokenizer.encode(str(text), bos=False, eos=True)
 
 
-def _dataset_name(path: Union[str, Path]) -> str:
-    """Derive a human-readable dataset name from a file/directory path.
-
-    Examples::
-
-        data/wiki.parquet          → wiki
-        data/code/                 → code
-        /abs/path/to/dolly.parquet → dolly
-    """
-    p = Path(path)
-    name = p.stem if p.is_file() or p.suffix else p.name
-    # Sanitise: keep alphanumeric, dash, underscore
-    name = re.sub(r"[^\w\-]", "_", name).strip("_")
-    return name or "dataset"
-
-
-def _tokenizer_id(tokenizer: Tokenizer) -> str:
-    """Return a short identifier for the tokenizer (model_name + vocab-size hash).
-
-    This ensures that switching tokenizers invalidates the cache automatically.
-    """
-    model = getattr(tokenizer, "model_name", "unknown")
-    vocab = str(getattr(tokenizer, "vocab_size", 0))
-    digest = hashlib.md5(vocab.encode()).hexdigest()[:8]
-    return f"{model}_{digest}"
+def _cache_key(data_path: Union[str, Path], tokenizer_path: str) -> str:
+    """Return an 8-char hex hash of the dataset path + tokenizer path."""
+    raw = f"{data_path}|{tokenizer_path}"
+    return hashlib.md5(raw.encode()).hexdigest()[:8]
 
 
 def _available_cpu_count() -> int:
@@ -164,10 +142,10 @@ class MixedParquet(DataModule):
     # ------------------------------------------------------------------
 
     def _source_cache_dir(self, data_path: Union[str, Path]) -> Path:
-        """Return the cache directory for a given source, e.g. ``.cache/wiki_llama3_a1b2c3d4/``."""
-        name = _dataset_name(data_path)
-        tok_id = _tokenizer_id(self.tokenizer)
-        return self.cache_dir / f"{name}_{tok_id}"
+        """Return the cache directory for a source, e.g. ``.cache/a1b2c3d4/``."""
+        tok_path = str(getattr(self.tokenizer, "path", ""))
+        key = _cache_key(data_path, tok_path)
+        return self.cache_dir / key
 
     # ------------------------------------------------------------------
     # DataModule interface
@@ -193,10 +171,10 @@ class MixedParquet(DataModule):
             val_out = cache / "val"
 
             if train_out.is_dir() and val_out.is_dir():
-                print(f"[MixedParquet] Cache hit for '{_dataset_name(data_path)}' at {cache}, skipping.")
+                print(f"[MixedParquet] Cache hit for '{data_path}' at {cache}, skipping.")
                 continue
 
-            print(f"[MixedParquet] Preparing source '{_dataset_name(data_path)}' → {cache}")
+            print(f"[MixedParquet] Preparing source '{data_path}' → {cache}")
 
             # --- read raw texts ---
             train_texts = _read_parquet_texts(data_path, self.text_column)

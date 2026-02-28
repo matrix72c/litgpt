@@ -4,7 +4,6 @@
 
 import hashlib
 import os
-import re
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -37,25 +36,25 @@ def _read_parquet_texts(path: Union[str, Path], text_column: str) -> List[str]:
     return texts
 
 
+class _AddLabel:
+    """Picklable transform that attaches a harmful/safe label to a sample."""
+
+    def __init__(self, label: torch.Tensor):
+        self.label = label
+
+    def __call__(self, sample):
+        return {"input_ids": sample, "is_harmful": self.label}
+
+
 def _tokenize(text: str, tokenizer: Tokenizer):
     """Tokenize a single text - used as the ``fn`` for ``litdata.optimize``."""
     yield tokenizer.encode(str(text), bos=False, eos=True)
 
 
-def _dataset_name(path: Union[str, Path]) -> str:
-    """Derive a human-readable dataset name from a file/directory path."""
-    p = Path(path)
-    name = p.stem if p.is_file() or p.suffix else p.name
-    name = re.sub(r"[^\w\-]", "_", name).strip("_")
-    return name or "dataset"
-
-
-def _tokenizer_id(tokenizer: Tokenizer) -> str:
-    """Return a short identifier for the tokenizer (model_name + vocab-size hash)."""
-    model = getattr(tokenizer, "model_name", "unknown")
-    vocab = str(getattr(tokenizer, "vocab_size", 0))
-    digest = hashlib.md5(vocab.encode()).hexdigest()[:8]
-    return f"{model}_{digest}"
+def _cache_key(data_path: Union[str, Path], tokenizer_path: str) -> str:
+    """Return an 8-char hex hash of the dataset path + tokenizer path."""
+    raw = f"{data_path}|{tokenizer_path}"
+    return hashlib.md5(raw.encode()).hexdigest()[:8]
 
 
 def _available_cpu_count() -> int:
@@ -127,10 +126,10 @@ class SGTMMixedParquet(DataModule):
             self._harmful_data_path_set = harmful_set
 
     def _source_cache_dir(self, data_path: Union[str, Path]) -> Path:
-        """Return the cache directory for a source, e.g. ``.cache/wiki_llama3_a1b2c3d4/``."""
-        name = _dataset_name(data_path)
-        tok_id = _tokenizer_id(self.tokenizer)
-        return self.cache_dir / f"{name}_{tok_id}"
+        """Return the cache directory for a source, e.g. ``.cache/a1b2c3d4/``."""
+        tok_path = str(getattr(self.tokenizer, "path", ""))
+        key = _cache_key(data_path, tok_path)
+        return self.cache_dir / key
 
     def connect(
         self,
@@ -153,10 +152,10 @@ class SGTMMixedParquet(DataModule):
             val_out = cache / "val"
 
             if train_out.is_dir() and val_out.is_dir():
-                print(f"[SGTMMixedParquet] Cache hit for '{_dataset_name(data_path)}' at {cache}, skipping.")
+                print(f"[SGTMMixedParquet] Cache hit for '{data_path}' at {cache}, skipping.")
                 continue
 
-            print(f"[SGTMMixedParquet] Preparing source '{_dataset_name(data_path)}' -> {cache}")
+            print(f"[SGTMMixedParquet] Preparing source '{data_path}' -> {cache}")
 
             train_texts = _read_parquet_texts(data_path, self.text_column)
 
@@ -215,11 +214,7 @@ class SGTMMixedParquet(DataModule):
             if self.harmful_data_paths is not None:
                 is_harmful = str(data_path) in self._harmful_data_path_set
                 label = torch.tensor(1 if is_harmful else 0, dtype=torch.long)
-
-                def _add_label(sample, label=label):
-                    return {"input_ids": sample, "is_harmful": label}
-
-                transform = _add_label
+                transform = _AddLabel(label)
 
             ds = StreamingDataset(
                 input_dir=str(source_dir),
