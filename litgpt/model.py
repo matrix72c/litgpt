@@ -89,6 +89,7 @@ class GPT(nn.Module):
         input_pos_maxp1: Optional[int] = None,
         lm_head_chunk_size: int = 0,
         is_harmful: Optional[torch.Tensor] = None,
+        exclude_safe_experts: bool = False,
     ) -> Union[torch.Tensor, List[torch.Tensor]]:
         """
         If `input_pos` is provided, the KV cache uses K and V vectors for
@@ -169,9 +170,10 @@ class GPT(nn.Module):
                     input_pos,
                     input_pos_maxp1,
                     is_harmful,
+                    exclude_safe_experts,
                 )
             else:
-                x = block(x, cos, sin, mask, input_pos, input_pos_maxp1, is_harmful)
+                x = block(x, cos, sin, mask, input_pos, input_pos_maxp1, is_harmful, exclude_safe_experts)
         x = self.transformer.ln_f(x)
         clamp_head = (
             partial(do_softcapping, thresh=self.config.final_logit_softcapping)
@@ -319,6 +321,7 @@ class Block(nn.Module):
         input_pos: Optional[torch.Tensor] = None,
         input_pos_maxp1: Optional[int] = None,
         is_harmful: Optional[torch.Tensor] = None,
+        exclude_safe_experts: bool = False,
     ) -> torch.Tensor:
         """
         Non-parallel residual       Parallel residual
@@ -353,8 +356,8 @@ class Block(nn.Module):
             x = attention_output + x
             x_normed = self.norm_2(x)
 
-        if is_harmful is not None and isinstance(self.mlp, LLaMAMoE):
-            return self.post_mlp_norm(self.mlp(x_normed, is_harmful)) + x
+        if isinstance(self.mlp, LLaMAMoE):
+            return self.post_mlp_norm(self.mlp(x_normed, is_harmful, exclude_safe_experts)) + x
         return self.post_mlp_norm(self.mlp(x_normed)) + x
 
 
@@ -804,10 +807,22 @@ class LLaMAMoE(nn.Module):
             )
         self.config = config
 
-    def forward(self, x: torch.Tensor, is_harmful: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        is_harmful: Optional[torch.Tensor] = None,
+        exclude_safe_experts: bool = False,
+    ) -> torch.Tensor:
         """
         Derived from: https://github.com/mistralai/mistral-src/blob/b46d6/moe_one_file_ref.py#L203-L219
         See also figure 1 in https://arxiv.org/abs/2211.15841
+
+        Args:
+            x: Input tensor of shape (B, T, C)
+            is_harmful: Optional tensor to control safe expert behavior during training.
+                When provided, safe experts are used but gradients may be detached.
+            exclude_safe_experts: If True, exclude safe experts from routing entirely.
+                Useful for evaluation/testing to measure standard-only performance.
         """
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
         residual_x = x.clone()
@@ -818,7 +833,7 @@ class LLaMAMoE(nn.Module):
 
         if not self.config.n_expert_groups:
             router = self.gate(x)  # (B*T, n_expert)
-            if self.config.n_safe_expert > 0 and is_harmful is not None:
+            if self.config.n_safe_expert > 0 and not exclude_safe_experts:
                 safe_router = self.safe_gate(x)
                 router = torch.cat((router, safe_router), dim=-1)
             probs, indices = torch.topk(router, self.config.n_expert_per_token)  # (B*T, n_expert_per_token)
@@ -838,7 +853,7 @@ class LLaMAMoE(nn.Module):
                 detach_mask = harmful_mask[token_idx]
                 expert_out = torch.where(detach_mask.unsqueeze(-1), expert_out.detach(), expert_out)
             y[token_idx] += probs[token_idx, expert_idx, None] * expert_out
-        if self.config.n_safe_expert > 0:
+        if self.config.n_safe_expert > 0 and not exclude_safe_experts:
             for mask, expert in zip(masks[self.config.n_expert :], self.safe_experts):
                 token_idx, expert_idx = torch.where(mask)
                 expert_out = expert(x[token_idx])
