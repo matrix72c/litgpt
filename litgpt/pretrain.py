@@ -378,6 +378,9 @@ def fit(
             else:
                 logits = model(input_ids, is_harmful=is_harmful)
             loss = chunked_cross_entropy(logits, targets)
+            aux_loss = model.get_aux_loss()
+            if aux_loss is not None:
+                loss = loss + aux_loss
             fabric.backward(loss / train.gradient_accumulation_iters(devices, num_nodes))
 
         running_loss.update(loss.detach())

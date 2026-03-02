@@ -282,6 +282,9 @@ def fit(
             logits = model(input_ids)
             # shift the targets such that output n predicts token n+1
             loss = chunked_cross_entropy(logits[..., :-1, :], targets[..., 1:])
+            aux_loss = model.get_aux_loss()
+            if aux_loss is not None:
+                loss = loss + aux_loss
             fabric.backward(loss / train.gradient_accumulation_iters(devices, num_nodes))
 
         running_loss.update(loss.detach())

@@ -100,6 +100,11 @@ class Config:
     first_k_dense_replace: Optional[int] = None
     routed_scaling_factor: float = 1.0
     norm_topk_prob: bool = False
+    # MoE auxiliary loss
+    # Supported types: "load_balancing", "z_loss", "load_balancing+z_loss", or None to disable
+    moe_aux_loss_type: Optional[str] = None
+    moe_aux_loss_coeff: float = 0.01
+    moe_z_loss_coeff: float = 0.001
     # GPT before/after blocks
     scale_embeddings: bool = False
     lm_head_bias: bool = False

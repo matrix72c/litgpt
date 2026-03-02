@@ -275,6 +275,26 @@ class GPT(nn.Module):
         for block in self.transformer.h:
             block.attn.kv_cache = None
 
+    def get_aux_loss(self) -> Optional[torch.Tensor]:
+        """Aggregate auxiliary losses from all MoE layers.
+
+        Each :class:`LLaMAMoE` block stores its per-layer aux loss in
+        ``_aux_loss`` after every forward call.  This method sums them up
+        so the training loop can simply do ``loss = ce_loss + model.get_aux_loss()``.
+
+        Returns ``None`` when no MoE layer produced an aux loss (e.g. during
+        inference or when ``moe_aux_loss_type`` is ``None``).
+        """
+        aux_losses: List[torch.Tensor] = []
+        for block in self.transformer.h:
+            if isinstance(block.mlp, LLaMAMoE):
+                layer_loss = getattr(block.mlp, "_aux_loss", None)
+                if layer_loss is not None:
+                    aux_losses.append(layer_loss)
+        if aux_losses:
+            return torch.stack(aux_losses).sum()
+        return None
+
 
 class Block(nn.Module):
     def __init__(
@@ -806,6 +826,7 @@ class LLaMAMoE(nn.Module):
                 config, intermediate_size=config.moe_intermediate_size * config.n_shared_expert
             )
         self.config = config
+        self._aux_loss: Optional[torch.Tensor] = None
 
     def forward(
         self,
@@ -832,14 +853,15 @@ class LLaMAMoE(nn.Module):
             harmful_mask = is_harmful.view(B, 1).expand(B, T).reshape(-1).to(dtype=torch.bool) # (B*T,)
 
         if not self.config.n_expert_groups:
-            router = self.gate(x)  # (B*T, n_expert)
+            router_logits = self.gate(x)  # (B*T, n_expert)
             if self.config.n_safe_expert > 0 and not exclude_safe_experts:
                 safe_router = self.safe_gate(x)
-                router = torch.cat((router, safe_router), dim=-1)
-            probs, indices = torch.topk(router, self.config.n_expert_per_token)  # (B*T, n_expert_per_token)
+                router_logits = torch.cat((router_logits, safe_router), dim=-1)
+            probs, indices = torch.topk(router_logits, self.config.n_expert_per_token)  # (B*T, n_expert_per_token)
             probs = probs.softmax(dim=1, dtype=torch.float).to(dtype=x.dtype)
         else:
             probs, indices = self.gate(x)
+            router_logits = getattr(self.gate, '_router_logits', None)
         if self.config.routed_scaling_factor != 1.0:
             probs = probs * self.config.routed_scaling_factor
         total_experts = self.config.n_expert + (self.config.n_safe_expert or 0)
@@ -865,6 +887,12 @@ class LLaMAMoE(nn.Module):
         y = y.view(B, T, C)
         if self.config.n_shared_expert:
             y = y + self.shared_experts(residual_x)
+
+        # --- Compute auxiliary loss ---
+        self._aux_loss = compute_moe_aux_loss(
+            self.config, router_logits, indices, self.config.n_expert,
+        )
+
         return y
 
 class GroupedTopkRouter(nn.Module):
@@ -908,7 +936,114 @@ class GroupedTopkRouter(nn.Module):
         if self.config.norm_topk_prob:
             denominator = topk_weights.sum(dim=-1, keepdim=True) + 1e-20
             topk_weights /= denominator
+        # Store router logits for aux loss computation in LLaMAMoE
+        self._router_logits = router_logits
         return topk_weights, topk_indices
+
+
+def compute_moe_aux_loss(
+    config: Config,
+    router_logits: Optional[torch.Tensor],
+    indices: torch.Tensor,
+    n_expert: int,
+) -> Optional[torch.Tensor]:
+    """Compute MoE auxiliary loss based on ``config.moe_aux_loss_type``.
+
+    Supported types (set via ``config.moe_aux_loss_type``):
+
+    * ``"load_balancing"`` – Switch-Transformer-style load-balancing loss;
+      encourages uniform token-to-expert assignment.
+    * ``"z_loss"`` – Router z-loss from ST-MoE; penalises large router
+      logits for training stability.
+    * ``"load_balancing+z_loss"`` – sum of both.
+    * ``None`` – no auxiliary loss (returns ``None``).
+
+    The caller (``LLaMAMoE.forward``) stores the returned tensor in
+    ``self._aux_loss``, which is later aggregated by ``GPT.get_aux_loss()``.
+
+    Args:
+        config: Model configuration.
+        router_logits: Raw router logits of shape ``(num_tokens, n_expert)``.
+            May be ``None`` when the gate does not expose logits.
+        indices: Selected expert indices, ``(num_tokens, n_expert_per_token)``.
+        n_expert: Number of routed experts (excluding safe/shared experts).
+
+    Returns:
+        Scalar loss tensor, or ``None`` if disabled.
+    """
+    loss_type = config.moe_aux_loss_type
+    if loss_type is None:
+        return None
+
+    aux_loss = torch.tensor(0.0, device=indices.device)
+
+    if "load_balancing" in loss_type:
+        aux_loss = aux_loss + _load_balancing_loss(
+            router_logits, indices, n_expert, config.n_expert_per_token,
+        ) * config.moe_aux_loss_coeff
+
+    if "z_loss" in loss_type:
+        if router_logits is not None:
+            aux_loss = aux_loss + _router_z_loss(
+                router_logits,
+            ) * config.moe_z_loss_coeff
+
+    return aux_loss
+
+
+def _load_balancing_loss(
+    router_logits: Optional[torch.Tensor],
+    indices: torch.Tensor,
+    n_expert: int,
+    n_expert_per_token: int,
+) -> torch.Tensor:
+    r"""Switch-Transformer / GShard load-balancing loss.
+
+    .. math::
+
+        L_{\text{balance}} = N \cdot \sum_{i=1}^{N} f_i \cdot P_i
+
+    where :math:`f_i` is the fraction of tokens routed to expert *i* and
+    :math:`P_i` is the mean router probability for expert *i*.
+
+    Only the first ``n_expert`` columns are considered so that safe experts
+    are excluded.
+    """
+    num_tokens = indices.size(0)
+    if num_tokens == 0:
+        return torch.tensor(0.0, device=indices.device)
+
+    # f_i: fraction of tokens dispatched to each expert
+    # Use only the standard expert indices (< n_expert)
+    expert_mask = F.one_hot(indices.clamp(max=n_expert - 1), num_classes=n_expert)  # (num_tokens, k, n_expert)
+    # Zero out entries where the original index was >= n_expert (safe experts)
+    valid = (indices < n_expert).unsqueeze(-1)  # (num_tokens, k, 1)
+    expert_mask = expert_mask * valid.int()
+    tokens_per_expert = expert_mask.float().sum(dim=1).mean(dim=0)  # (n_expert,)
+
+    # P_i: mean router probability for each expert
+    if router_logits is not None:
+        router_probs = F.softmax(router_logits[:, :n_expert].float(), dim=-1)  # (num_tokens, n_expert)
+    else:
+        # Fallback: uniform probability (loss becomes a pure frequency penalty)
+        router_probs = torch.ones(num_tokens, n_expert, device=indices.device) / n_expert
+
+    prob_per_expert = router_probs.mean(dim=0)  # (n_expert,)
+
+    return n_expert * (tokens_per_expert * prob_per_expert).sum()
+
+
+def _router_z_loss(router_logits: torch.Tensor) -> torch.Tensor:
+    r"""Router z-loss from ST-MoE.
+
+    .. math::
+
+        L_z = \frac{1}{B \cdot T} \sum \left(\log \sum_j e^{x_j}\right)^2
+
+    Penalises large router logits to improve training stability.
+    """
+    log_z = torch.logsumexp(router_logits.float(), dim=-1)  # (num_tokens,)
+    return (log_z ** 2).mean()
 
 
 def build_rope_cache(
