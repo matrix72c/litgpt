@@ -114,7 +114,7 @@ class MixedParquet(DataModule):
     """Optional mixing weights, one per source.  If not provided, sources are mixed uniformly."""
     text_column: str = "text"
     """Name of the Parquet column containing raw text.  Applied to all sources."""
-    cache_dir: Path = Path(".cache")
+    cache_dir: Path = Path("data/.cache")
     """Root directory for tokenized litdata streaming caches."""
     val_split_fraction: float = 0.05
     """Fraction of documents reserved for validation when no val path is given for a source."""
