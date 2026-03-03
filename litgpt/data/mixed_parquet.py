@@ -163,7 +163,7 @@ class MixedParquet(DataModule):
 
     def prepare_data(self) -> None:
         """Tokenize each Parquet source and write litdata streaming chunks to cache."""
-        from litdata import optimize
+        from litdata import TokensLoader, optimize
 
         for i, data_path in enumerate(self.data_paths):
             cache = self._source_cache_dir(data_path)
@@ -197,6 +197,7 @@ class MixedParquet(DataModule):
                     output_dir=str(train_out),
                     num_workers=min(num_proc, len(train_texts)),
                     chunk_bytes="200MB",
+                    item_loader=TokensLoader(),
                 )
 
             if not val_out.is_dir():
@@ -206,6 +207,7 @@ class MixedParquet(DataModule):
                     output_dir=str(val_out),
                     num_workers=min(num_proc, len(val_texts)),
                     chunk_bytes="200MB",
+                    item_loader=TokensLoader(),
                 )
 
     def train_dataloader(self) -> DataLoader:
