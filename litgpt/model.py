@@ -880,8 +880,14 @@ class LLaMAMoE(nn.Module):
                 token_idx, expert_idx = torch.where(mask)
                 expert_out = expert(x[token_idx])
                 if harmful_mask is not None:
-                    detach_mask = ~harmful_mask[token_idx]
-                    expert_out = torch.where(detach_mask.unsqueeze(-1), expert_out.detach(), expert_out)
+                    # For is_harmful=False tokens, set safe expert output to 0
+                    # Safe experts should only contribute for harmful tokens
+                    is_harmful_tokens = harmful_mask[token_idx]
+                    expert_out = torch.where(
+                        is_harmful_tokens.unsqueeze(-1),
+                        expert_out,
+                        torch.zeros_like(expert_out)
+                    )
                 y[token_idx] += probs[token_idx, expert_idx, None] * expert_out
 
         y = y.view(B, T, C)
