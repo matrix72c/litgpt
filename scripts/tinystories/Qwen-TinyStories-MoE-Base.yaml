@@ -64,8 +64,8 @@ data:
       - data/multilingual-tinystories/en/validation.parquet
       - data/multilingual-tinystories/es/validation.parquet
     weights:
-      - 0.5
-      - 0.5
+      - 0.9
+      - 0.1
     text_column: text
 
 logger_name: wandb
