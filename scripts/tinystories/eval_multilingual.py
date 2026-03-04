@@ -367,9 +367,9 @@ def main():
 
     # ---- One-line Summary (copy-paste friendly) ----------------------------
     exclude_str = "_exclude_safe" if args.exclude_safe_experts else ""
-    print(f"\n| Config | en_loss | en_ppl | es_loss | es_ppl | std_pct | safe_pct | std_cv | safe_cv |")
-    print(f"|--------|---------|--------|---------|--------|---------|---------|--------|---------|")
-    print(f"|{exclude_str}|{en_loss:.4f}|{en_ppl:.2f}|{es_loss:.4f}|{es_ppl:.2f}|{en_metrics['std_pct']:.1f}%|{en_metrics['safe_pct']:.1f}%|{en_metrics['std_cv']:.3f}|{en_metrics['safe_cv']:.3f}|")
+    print(f"\n| Config | en_loss | en_ppl | es_loss | es_ppl | en_std_pct | en_safe_pct | es_std_pct | es_safe_pct | en_std_cv | en_safe_cv | es_std_cv | es_safe_cv |")
+    print(f"|--------|---------|--------|---------|--------|------------|-------------|------------|-------------|----------|------------|----------|------------|")
+    print(f"|{exclude_str}|{en_loss:.4f}|{en_ppl:.2f}|{es_loss:.4f}|{es_ppl:.2f}|{en_metrics['std_pct']:.1f}% |{en_metrics['safe_pct']:.1f}% |{es_metrics['std_pct']:.1f}% |{es_metrics['safe_pct']:.1f}% |{en_metrics['std_cv']:.3f} |{en_metrics['safe_cv']:.3f} |{es_metrics['std_cv']:.3f} |{es_metrics['safe_cv']:.3f} |")
 
 
 if __name__ == "__main__":
